@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "driver/rmt_tx.h"
+#include "driver/uart.h"
 
 
 
@@ -15,21 +16,24 @@
 #define RESOLUTION 1 * 1000 * 1000
 #define RMT_PIN 5
 #define TAG "RMT"
-#define FRAME_DURATION_US 20000
-#define CHANNEL_NUM 7
-#define PPM_PULSE_WIDTH 200
+#define FRAME_DURATION_US 25000
+#define CHANNEL_NUM 8
+#define PPM_PULSE_WIDTH 100
 
 
 enum channel{
-    BT_1 = 0,
-    BT_2,
-    BT_3,
-    BT_4,
-    BT_5,
-    BT_6,
+    CH_1 = 0,
+    CH_2,
+    CH_3,
+    CH_4,
+    CH_5,
+    CH_6, 
+    CH_7,
+    CH_8
 };
 
-uint16_t channel_val[CHANNEL_NUM+1] = {2000, 1000, 1300, 1800, 1700, 1650, 1430};
+// uint16_t channel_val[CHANNEL_NUM+1] = {2000, 1000, 1300, 1800, 1200, 1600, 2000, 1000};
+uint16_t channel_val[CHANNEL_NUM+1] = {0};
 
 rmt_channel_handle_t rmt_channel = NULL;
 rmt_encoder_handle_t encoder = NULL;
@@ -37,6 +41,17 @@ rmt_encoder_handle_t encoder = NULL;
 rmt_transmit_config_t rmt_tx = {
     .loop_count = 0,
 };
+
+
+gpio_config_t io_conf = {
+    .intr_type = GPIO_INTR_DISABLE,
+    .mode = GPIO_MODE_OUTPUT,
+    .pull_down_en = 0,
+    .pull_down_en = 0
+};
+
+
+
 
 static size_t ppm_encoder_callback(const void *data, size_t data_size,
     size_t symbols_written, size_t symbols_free,
@@ -71,33 +86,79 @@ static size_t ppm_encoder_callback(const void *data, size_t data_size,
     return current_symbol + 1;
 }
 
+
 void channel_task(){
+    int counter = 2000;
+    while(1){
+        // for(int x = 1000; x < 2000; x+=10){
+        for(int i = 0; i < CHANNEL_NUM; i ++){
+                channel_val[i] = counter;
+            }
+            // }
+        // channel_val[BT_1] = 1000  + (counter * 100);
+        // channel_val[BT_2] = 2000 - (counter * 100);
+        // channel_val[BT_3] = 1000 + (counter * 120);
+        // channel_val[BT_4] = 1000 + (counter * 135);
+        // channel_val[BT_5] = 1000 - (counter * 135);
+        // channel_val[BT_6] = 1000 - (counter * 135);
+        // channel_val[BT_7] = 1000 - (counter * 135);
+        // channel_val[BT_8] = 1000 - (counter * 135);
+
+        
+        
+        counter --;
+        if(counter < 1000) counter = 2000;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+void rmt_task(){
     int counter = 0;
     while(1){
-
-        channel_val[BT_1] = 1000  + (counter * 100);
-        channel_val[BT_2] = 2000 - (counter * 100);
         
-        counter ++;
-        if(counter > 10) counter = 0;
-
-        ESP_LOGI("ch", "%d %d", channel_val[0], channel_val[1]);
+        // ESP_LOGI("ch", "%d %d", channel_val[0], channel_val[1]);
         ESP_ERROR_CHECK(rmt_transmit(rmt_channel, encoder, channel_val, sizeof(channel_val), &rmt_tx));
         ESP_ERROR_CHECK(rmt_tx_wait_all_done(rmt_channel, portMAX_DELAY));
     }
 
 }
 
+const uart_port_t uart_num = UART_NUM_2;
+uart_config_t uart_config = {
+    .baud_rate = 115200,
+    .data_bits = UART_DATA_8_BITS,
+    .parity = UART_PARITY_DISABLE,
+    .stop_bits = UART_STOP_BITS_1,
+    .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+};
+
+
+void uart_task(void){
+    uint8_t data[128];
+    int len = 0;
+    
+    while(1){
+        ESP_ERROR_CHECK(uart_get_buffered_data_len(uart_num, (size_t*)&len));
+        len = uart_read_bytes(uart_num, data, len, 100);
+        if(len > 0){
+            ESP_LOGI("uart", "%d", data[0]);
+        }
+        uart_flush(uart_num);
+
+    }
+}
 
 void app_main(void)
 {
+
+ESP_ERROR_CHECK(uart_param_config(uart_num, &uart_config));
 
 
 ESP_LOGI(TAG, "Create RMT TX channel");
     rmt_tx_channel_config_t tx_chan_config = {
         .clk_src = RMT_CLK_SRC_DEFAULT, 
         .gpio_num = RMT_PIN,
-        .mem_block_symbols = 64, 
+        .mem_block_symbols = 128, 
         .resolution_hz = RESOLUTION,
         .trans_queue_depth = 4, 
     };
@@ -114,7 +175,8 @@ ESP_LOGI(TAG, "Create RMT TX channel");
 
 
 
-    xTaskCreatePinnedToCore(channel_task, "channel", 2048, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(rmt_task, "rmt", 2048, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(channel_task, "channel", 2048, NULL, 4, NULL, 0);
  
 
 }
