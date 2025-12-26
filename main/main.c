@@ -12,7 +12,7 @@
 
 
 
-
+#define DEBUG 1
 
 #define RESOLUTION 1 * 1000 * 1000
 #define RMT_PIN 5
@@ -32,36 +32,20 @@
 #define DRONE_STEP 500
 #define PAYLOAD_STEP 100
 
-enum Command {
-    CMD_PAYLOAD = 0,
-    CMD_CAMERA,
-    CMD_DRONE,
-    CMD_LIGHT ,
-    CMD_SERVO 
-};
 
-// VALUES = ['alfa', 'charlie', 'delta', 'echo', 'foxtrot', 'hotel']
-enum Value {
-    VAL_ALFA    = 0,
-    VAL_CHARLIE,
-    VAL_DELTA  ,
-    VAL_ECHO   ,
-    VAL_FOXTROT,
-    VAL_HOTEL  
-};
+
 
 enum channel{
     ROLL = 0,
     PITCH,
     YAW,
     THROTTLE,
+    ARM,
     CAM, 
-    DRONE,
-    PAYLOAD,
-    IDK
+    DRONE, 
+    PAYLOAD
 };
 
-// uint16_t channel_val[CHANNEL_NUM+1] = {2000, 1000, 1300, 1800, 1200, 1600, 2000, 1000};
 uint16_t channel_val[CHANNEL_NUM] = {0};
 
 rmt_channel_handle_t rmt_channel = NULL;
@@ -121,7 +105,7 @@ void execute_command(uint8_t cmd) {
     ESP_LOGI(TAG, "Executing: Cmd %d", cmd);
 
     switch (cmd) {
-        case CMD_PAYLOAD:
+        case PAYLOAD:
         if(channel_val[PAYLOAD] < CHANNEL_HIGH){
             channel_val[PAYLOAD] += PAYLOAD_STEP;
         } else {
@@ -130,7 +114,7 @@ void execute_command(uint8_t cmd) {
         ESP_LOGI(TAG, "Action: Drop Payload, ch %d %d",PAYLOAD,  channel_val[PAYLOAD]);
             break;
 
-        case CMD_CAMERA:
+        case CAM:
         if(channel_val[CAM] < CHANNEL_HIGH){
             channel_val[CAM] += CAM_STEP;
         } else {
@@ -140,7 +124,7 @@ void execute_command(uint8_t cmd) {
             break;
 
 
-        case CMD_DRONE:
+        case DRONE:
         if(channel_val[DRONE] < CHANNEL_HIGH){
             channel_val[DRONE] += DRONE_STEP;
         } else {
@@ -148,13 +132,7 @@ void execute_command(uint8_t cmd) {
         }
         ESP_LOGI(TAG, "Action: Toggle Switch, ch %d %d",DRONE,  channel_val[DRONE]);
             break;
-        
-        case CMD_LIGHT:
-            ESP_LOGI(TAG, "Action: Light Command");
-            break;
-        case CMD_SERVO:
-            ESP_LOGI(TAG, "Action: Servo Command");
-            break;
+            
         default:
             ESP_LOGW(TAG, "Unknown Command ID");
             break;
@@ -166,14 +144,13 @@ void execute_command(uint8_t cmd) {
 void rmt_task(){
     int counter = 0;
     while(1){
-        // for(int i = 0; i < 3; i ++){
-        //     execute_command(i);
-        // }
-        // for(int i = 0; i < CHANNEL_NUM; i ++){
-        //         channel_val[i] = counter;
-        //     }
-        // counter +=10;
-        // if(counter > 1900) counter = 1000;
+        if(DEBUG){
+        for(int i = 0; i < CHANNEL_NUM; i ++){
+                channel_val[i] = counter;
+            }
+        counter +=10;
+        if(counter > 1900) counter = 1000;
+        }
         // ESP_LOGI("ch", "%d %d", channel_val[0], channel_val[1]);
         ESP_ERROR_CHECK(rmt_transmit(rmt_channel, encoder, channel_val, sizeof(channel_val), &rmt_tx));
         ESP_ERROR_CHECK(rmt_tx_wait_all_done(rmt_channel, portMAX_DELAY));
@@ -195,7 +172,6 @@ uart_config_t uart_config = {
 
 
 void uart_task(void *arg) {
-    // uint8_t byte;
     uint8_t packet[3];
     
     while (1) {
@@ -207,6 +183,7 @@ void uart_task(void *arg) {
                 uint8_t checksum = packet[2];
 
                 if(checksum == (cmd & 0xFF)){
+                ESP_LOGI(TAG, "Received command: Cmd %d", cmd);
                 execute_command(cmd);
                 }
                 
