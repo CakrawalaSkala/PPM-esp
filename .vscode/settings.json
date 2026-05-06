@@ -1,12 +1,12 @@
 {
   "C_Cpp.intelliSenseEngine": "default",
-  "idf.espIdfPath": "/home/deeric/esp/v5.5.1/esp-idf",
-  "idf.pythonInstallPath": "/home/deeric/miniconda3/bin/python3",
+  "idf.espIdfPath": "/home/arvito/esp/esp-idf",
+  "idf.pythonInstallPath": "/usr/bin/python3",
   "idf.openOcdConfigs": [
     "board/esp32-wrover-kit-3.3v.cfg"
   ],
-  "idf.port": "/dev/ttyACM0",
-  "idf.toolsPath": "/home/deeric/.espressif",
+  "idf.port": "/dev/ttyUSB0",
+  "idf.toolsPath": "/home/arvito/.espressif",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32"
   },
@@ -19,5 +19,6 @@
   "python-envs.defaultEnvManager": "ms-python.python:conda",
   "python-envs.defaultPackageManager": "ms-python.python:conda",
   "python-envs.pythonProjects": [],
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "idf.currentSetup": "/home/arvito/esp/esp-idf"
 }
