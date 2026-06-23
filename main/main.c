@@ -13,51 +13,108 @@
 #include "oled.h"
 #include "nvs_flash.h"
 
-#define DEBUG 0 //JANGAN DI ENABLE
+#define DEBUG 0
 
 #define RESOLUTION 1 * 1000 * 1000
 #define RMT_PIN 5
 #define TAG "RMT"
-#define FRAME_DURATION_US 25000
-#define CHANNEL_NUM 8 // SEBELUMNYA 8
-#define PPM_PULSE_WIDTH 100 //TAMBAHI JIKA TIDAK DETEK ATAU TIDAK STABIL (100-300) //UPDATE JANGAN DI GANTI, BIAR 100
+#define FRAME_DURATION_US 20000
+#define CHANNEL_NUM 8
+#define PPM_PULSE_WIDTH 100
 
 #define BUF_SIZE (1024)
-#define UART_RX_PIN 16 
-#define UART_BAUDRATE 9600
+#define UART_RX_PIN 16
+#define UART_BAUDRATE 115200
 
 #define RANGE_CHANNEL 2000 - 1000
 #define CHANNEL_LOW 1000
 #define CHANNEL_HIGH 2000
 #define CAM_STEP 1000
 #define DRONE_STEP 500
+#define LOADER_STEP 300
+
+#define MULTI_CLICK_TIME 500
+#define AFK_TIMEOUT 5000
+#define TAP_CONFIRM_TIMEOUT 3000
+#define FINAL_TAP_TIMEOUT 3000
+#define SYNC_WINDOW 120
+
+uint8_t syncCount = 0;
+uint32_t lastSyncTime = 0;
+
+bool prevR = true;
+bool prevL = true;
+
+bool readyR = false;
+bool readyL = false;
+
+bool afkLock = false;
+
+bool syncWaiting = false;
+uint32_t syncStartTime = 0;
+
+bool dropperTriggeredA = false;
+bool dropperTriggeredB = false;
+
+int countR = 0;
+int countL = 0;
+
+uint32_t lastReleaseR = 0;
+uint32_t lastReleaseL = 0;
+
+bool cmd5Pending = false;
 
 uint8_t manualCMD;
 uint8_t PaySeq, DronePos, DropperPosA, DropperPosB;
 
-enum data_map{ //map data ke command
+#define SWpin 27
+
+bool lastManualMode = false;
+bool ManualMode;
+bool enVoiceA;
+bool enVoiceB;
+bool resetMan = 0;
+
+int8_t buzz;
+
+int16_t touchR, touchL, RawtouchR, RawtouchL;
+
+extern const uint8_t epd_bitmap_logo[];
+
+enum data_map
+{
     ERROR_CMD = 1,
-    PAYLOAD_LEFT_CMD =  2,
+    PAYLOAD_LEFT_CMD = 2,
     PAYLOAD_RIGHT_CMD = 3,
     SWITCH_CAMERA_CMD = 4,
     SWITCH_DRONE_CMD = 5,
-    PAYLOAD_RESET = 6,
+    PAYLOAD_RESET_CMD = 6,
+    PAYLOAD_LOADER_CMD = 7,
+    RESET_DROPPER = 8,
+    DRONE_ROTATE = 9,
 };
 
-enum channel_map{ //map channel ke command
-    ROLL = 1,
+enum channel_map
+{
+    ROLL = 0,
     PITCH,
-    YAW,
-    THROTTLE,
-    ARM,
+    RESET_DROPPER_CH,
+    PAYLOAD_LOADER_CH,
+    ROTATE_CH,
     CAM_CH,
     DRONE_CH,
     PAYLOAD_CH,
 };
 
+static int drone   = 1;
+static int cam     = 1;
+static int mode    = 0;
+static int payload = 0;
+static int pos     = 0;
+static int dropA   = 0;
+static int dropB   = 0;
 
-
-uint16_t channel_val[CHANNEL_NUM] = {1000};
+uint16_t channel_val[CHANNEL_NUM] = {0};
 
 rmt_channel_handle_t rmt_channel = NULL;
 rmt_encoder_handle_t encoder = NULL;
@@ -106,51 +163,113 @@ static size_t ppm_encoder_callback(const void *data, size_t data_size,
 
 const uart_port_t uart_num = UART_NUM_2;
 
-    switch (cmd) {
-case PAYLOAD_RIGHT_CMD:
+void execute_command(uint8_t cmd)
+{
+    ESP_LOGI(TAG, "Try to Executing: Cmd %d", cmd);
 
-    channel_val[PAYLOAD_CH] = 2000;
-    ESP_LOGI(TAG, "PAYLOAD RIGHT, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
+    if (cmd == PAYLOAD_RIGHT_CMD && enVoiceA)
+    {
+        buzz = 4;
+        channel_val[PAYLOAD_CH] = 2000;
+        DropperPosA = (DropperPosA + 1) % 3;
+        ESP_LOGI(TAG, "PAYLOAD FRONT, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
 
-    vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(100));
 
-    channel_val[PAYLOAD_CH] = 1500;
-    ESP_LOGI(TAG, "PAYLOAD CENTER, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
-    break;
+        channel_val[PAYLOAD_CH] = 1500;
+        ESP_LOGI(TAG, "PAYLOAD FRONT, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
+    }
+    else if (cmd == PAYLOAD_LEFT_CMD && enVoiceA)
+    {
+        buzz = 4;
+        channel_val[PAYLOAD_CH] = 1000;
+        DropperPosB = (DropperPosB + 1) % 3;
+        ESP_LOGI(TAG, "PAYLOAD REAR, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
 
+        vTaskDelay(pdMS_TO_TICKS(100));
 
-case PAYLOAD_LEFT_CMD:
-    channel_val[PAYLOAD_CH] = 1000;
-    ESP_LOGI(TAG, "PAYLOAD LEFT, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
-
-    vTaskDelay(pdMS_TO_TICKS(1000));
-
-    channel_val[PAYLOAD_CH] = 1500;
-    ESP_LOGI(TAG, "PAYLOAD CENTER, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
-    break;
-
-
-        case SWITCH_CAMERA_CMD:
-        if(channel_val[CAM_CH] < CHANNEL_HIGH){
+        channel_val[PAYLOAD_CH] = 1500;
+        ESP_LOGI(TAG, "PAYLOAD REAR, ch %d %d", PAYLOAD_CH, channel_val[PAYLOAD_CH]);
+    }
+    else if (cmd == SWITCH_CAMERA_CMD && enVoiceA)
+    {
+        buzz = 1;
+        if (channel_val[CAM_CH] < CHANNEL_HIGH)
+        {
             channel_val[CAM_CH] += CAM_STEP;
-        } else {
+        }
+        else
+        {
             channel_val[CAM_CH] = CHANNEL_LOW;
         }
-        ESP_LOGI(TAG, "Action: Cam switch, ch %d %d",CAM_CH,  channel_val[CAM_CH]);
-            break;
+
+        ESP_LOGI(TAG, "Action: Cam switch, ch %d %d", CAM_CH, channel_val[CAM_CH]);
+    }
+    else if (cmd == SWITCH_DRONE_CMD && enVoiceB)
+    {
+        buzz = 2;
+        DropperPosA = 0;
+        DropperPosB = 0;
+
+        if (channel_val[DRONE_CH] < CHANNEL_HIGH)
+        {
+            channel_val[DRONE_CH] += DRONE_STEP;
+        }
+        else
+        {
+            channel_val[DRONE_CH] = CHANNEL_LOW;
+        }
 
         channel_val[RESET_DROPPER_CH] = 1000;
         vTaskDelay(pdMS_TO_TICKS(100));
         channel_val[RESET_DROPPER_CH] = 1500;
 
+        ESP_LOGI(TAG, "Action: Drone Switch, ch %d %d", DRONE_CH, channel_val[DRONE_CH]);
+    }
+    else if (cmd == PAYLOAD_LOADER_CMD && enVoiceA)
+    {
+        buzz = 1;
+        PaySeq = (PaySeq + 1) % 4;
 
-        case SWITCH_DRONE_CMD:
-        if(channel_val[DRONE_CH] < CHANNEL_HIGH){
-            channel_val[DRONE_CH] += DRONE_STEP;
-        } else {
-            channel_val[DRONE_CH] = CHANNEL_LOW;
+        if (channel_val[PAYLOAD_LOADER_CH] < 1800)
+        {
+            channel_val[PAYLOAD_LOADER_CH] += LOADER_STEP;
         }
-        ESP_LOGI(TAG, "Action: Toggle Switch, ch %d %d",DRONE_CH,  channel_val[DRONE_CH]);
+        else
+        {
+            channel_val[PAYLOAD_LOADER_CH] = CHANNEL_LOW;
+        }
+        DropperPosA = 0;
+        DropperPosB = 0;
+        channel_val[RESET_DROPPER_CH] = 1000;
+        vTaskDelay(pdMS_TO_TICKS(100));
+        channel_val[RESET_DROPPER_CH] = 1500;
+
+        ESP_LOGI(TAG, "Action: Reload Payload, ch %d %d", PAYLOAD_LOADER_CH, channel_val[PAYLOAD_LOADER_CH]);
+    }
+    else if ((cmd == PAYLOAD_RESET_CMD && enVoiceA) || resetMan)
+    {
+        buzz = 3;
+        channel_val[ROTATE_CH] = 1000;
+        channel_val[PAYLOAD_LOADER_CH] = 1000;
+        PaySeq = 0;
+        DronePos = 0;
+        ESP_LOGI(TAG, "PAYLOAD RESET, ch %d %d", ROTATE_CH, channel_val[ROTATE_CH]);
+        ESP_LOGI(TAG, "PAYLOAD RESET, ch %d %d", PAYLOAD_LOADER_CH, channel_val[PAYLOAD_LOADER_CH]);
+    }
+    else if (cmd == DRONE_ROTATE && enVoiceA)
+    {
+        buzz = 1;
+        DronePos = (DronePos + 1) % 4;
+
+        switch (DronePos)
+        {
+        case (1):
+            channel_val[ROTATE_CH] = 1500;
+            break;
+
+        case (2):
+            channel_val[ROTATE_CH] = 1000;
             break;
 
         case (3):
@@ -406,15 +525,10 @@ void uart_task(void *arg)
     {
         int len = uart_read_bytes(uart_num, packet, 3, 50 / portTICK_PERIOD_MS);
 
-
-void uart_task(void *arg) {
-    uint8_t packet[3];
-    
-    while (1) {
-        int len = uart_read_bytes(uart_num, packet, 3, 50 / portTICK_PERIOD_MS);
-
-        if (len == 3) {
-            if (packet[0] == 0xAA) {
+        if (len == 3)
+        {
+            if (packet[0] == 0xAA)
+            {
                 uint8_t cmd = packet[1];
                 uint8_t checksum = packet[2];
 
